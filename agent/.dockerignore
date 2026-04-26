@@ -1,0 +1,14 @@
+.git
+.idea
+.vscode
+.env
+.env.*
+*.exe
+*.test
+*.tar
+*.tar.gz
+*.zip
+coverage.out
+tmp
+dist
+build

@@ -1,0 +1,12 @@
+FROM golang:1.26 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o cloudops-assistant ./cmd/assistant
+
+FROM gcr.io/distroless/static-debian12
+WORKDIR /app
+COPY --from=builder /app/cloudops-assistant /app/cloudops-assistant
+EXPOSE 8090
+ENTRYPOINT ["/app/cloudops-assistant"]

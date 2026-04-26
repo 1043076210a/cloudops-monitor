@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: CloudOps Dashboards
+    orgId: 1
+    folder: CloudOps
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

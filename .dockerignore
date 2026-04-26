@@ -1,0 +1,17 @@
+.git
+.idea
+.vscode
+.env
+.env.*
+deployments/k8s/secret.yaml
+kubeconfig*
+*.exe
+*.test
+*.tar
+*.tar.gz
+*.zip
+coverage.out
+tmp
+dist
+build
+node_modules

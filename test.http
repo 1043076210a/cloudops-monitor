@@ -1,0 +1,42 @@
+### 测试健康检查（GET请求）
+GET http://localhost:8080/ping
+
+### 依赖健康检查（MySQL/Redis/VM）
+GET http://localhost:8080/healthz/deps
+
+### 注册机器（POST请求）
+POST http://localhost:8080/api/v1/machines/register
+Content-Type: application/json
+
+{
+    "machine_id": "manual-test-node-001",
+    "ip": "192.168.1.100",
+    "hostname": "test-server",
+    "status": "active"
+}
+
+### 幂等更新同一机器（重复注册不报错）
+POST http://localhost:8080/api/v1/machines/register
+Content-Type: application/json
+
+{
+    "machine_id": "manual-test-node-001",
+    "ip": "192.168.1.101",
+    "hostname": "test-server-updated",
+    "status": "active"
+}
+
+### 查看最近告警事件（MVP）
+GET http://localhost:8080/api/v1/alerts/recent?limit=20
+
+### 按机器过滤最近告警
+GET http://localhost:8080/api/v1/alerts/recent?machine_id=manual-test-node-001&limit=20
+
+### 仅查看触发告警（P0）
+GET http://localhost:8080/api/v1/alerts/recent?level=P0&limit=20
+
+### 仅查看恢复事件（RECOVERY）
+GET http://localhost:8080/api/v1/alerts/recent?level=RECOVERY&limit=20
+
+### 仅查看通知失败的告警
+GET http://localhost:8080/api/v1/alerts/recent?notify_status=failed&limit=20

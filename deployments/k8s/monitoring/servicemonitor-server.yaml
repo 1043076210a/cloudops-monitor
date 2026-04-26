@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cloudops-server
+  namespace: cloudops
+  labels:
+    app.kubernetes.io/name: cloudops-server
+    app.kubernetes.io/part-of: cloudops-monitor
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudops-server
+  namespaceSelector:
+    matchNames:
+      - cloudops
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

@@ -1,0 +1,24 @@
+apiVersion: cloudops.example.com/v1alpha1
+kind: CloudOpsMonitor
+metadata:
+  name: cloudops
+  namespace: cloudops
+  labels:
+    app.kubernetes.io/name: cloudops
+    app.kubernetes.io/part-of: cloudops-monitor
+spec:
+  ingestMode: kafka
+  server:
+    replicas: 1
+    image: cloudops/server:dev
+  worker:
+    replicas: 1
+    image: cloudops/worker:dev
+  agent:
+    image: cloudops/agent:dev
+  dependencies:
+    mysqlDSNSecretRef: cloudops-secret
+    redisAddr: cloudops-redis:6379
+    kafkaBrokers: cloudops-redpanda:9092
+    victoriaMetricsURL: http://cloudops-victoriametrics:8428/api/v1/import/prometheus
+    otelEndpoint: cloudops-otel-collector:4317

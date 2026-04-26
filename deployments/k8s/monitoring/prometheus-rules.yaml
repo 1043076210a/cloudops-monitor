@@ -1,0 +1,45 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cloudops-platform-rules
+  namespace: cloudops
+  labels:
+    app.kubernetes.io/name: cloudops-platform-rules
+    app.kubernetes.io/part-of: cloudops-monitor
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: cloudops.platform
+      rules:
+        - alert: CloudOpsServerIngestErrors
+          expr: sum(rate(cloudops_server_ingest_requests_total{status=~"error|bad_request"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: CloudOps server ingest errors detected
+            description: Server ingest endpoints are returning errors or bad requests.
+        - alert: CloudOpsVictoriaMetricsWriteErrors
+          expr: sum(rate(cloudops_server_vm_writes_total{status!="success"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: CloudOps VictoriaMetrics writes are failing
+            description: Server cannot reliably write host metrics into VictoriaMetrics.
+        - alert: CloudOpsWorkerForwardErrors
+          expr: sum(rate(cloudops_worker_forward_total{status!="success"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: CloudOps worker forward errors detected
+            description: Worker is failing to forward Kafka messages to the process endpoint.
+        - alert: CloudOpsAlertNotificationFailures
+          expr: sum(rate(cloudops_server_alert_notifications_total{status="failed"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: CloudOps alert notifications are failing
+            description: Alert notification adapter returned one or more failures.

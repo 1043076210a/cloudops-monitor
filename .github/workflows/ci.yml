@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test root module
+        run: go test ./...
+
+      - name: Build root binaries
+        run: |
+          go build .
+          go build ./cmd/worker
+          go build ./cmd/assistant
+          go build ./cmd/operator
+
+      - name: Test agent module
+        working-directory: agent
+        run: go test ./...
+
+      - name: Build agent
+        working-directory: agent
+        run: go build .
