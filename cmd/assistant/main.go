@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,7 @@ type triageResponse struct {
 	LogQueries      []string      `json:"log_queries"`
 	LikelyCauses    []string      `json:"likely_causes"`
 	RecommendedNext []string      `json:"recommended_next"`
+	Diagnosis       *diagnosis    `json:"diagnosis,omitempty"`
 	Notes           []string      `json:"notes"`
 }
 
@@ -57,6 +59,30 @@ type appConfig struct {
 	VictoriaBaseURL  string
 	LokiBaseURL      string
 	DefaultWindowMin int
+	LLMEnabled       bool
+	LLMBaseURL       string
+	LLMAPIKey        string
+	LLMModel         string
+	LLMTimeoutSec    int
+}
+
+type diagnosis struct {
+	Summary        string   `json:"summary"`
+	Severity       string   `json:"severity"`
+	PossibleCauses []string `json:"possible_causes"`
+	Evidence       []string `json:"evidence"`
+	NextSteps      []string `json:"next_steps"`
+	Confidence     float64  `json:"confidence"`
+}
+
+type triageContext struct {
+	MachineID       string        `json:"machine_id"`
+	WindowMinutes   int           `json:"window_minutes"`
+	AlertContext    []alertRecord `json:"alert_context"`
+	MetricQueries   []string      `json:"metric_queries"`
+	LogQueries      []string      `json:"log_queries"`
+	LikelyCauses    []string      `json:"likely_causes"`
+	RecommendedNext []string      `json:"recommended_next"`
 }
 
 func main() {
@@ -66,6 +92,11 @@ func main() {
 		VictoriaBaseURL:  trimRightSlash(getEnv("ASSISTANT_VICTORIA_BASE_URL", "http://localhost:8428")),
 		LokiBaseURL:      trimRightSlash(getEnv("ASSISTANT_LOKI_BASE_URL", "http://localhost:3100")),
 		DefaultWindowMin: getEnvAsInt("ASSISTANT_DEFAULT_WINDOW_MINUTES", 15),
+		LLMEnabled:       getEnvAsBool("LLM_ENABLED", false),
+		LLMBaseURL:       trimRightSlash(getEnv("LLM_BASE_URL", "")),
+		LLMAPIKey:        getEnv("LLM_API_KEY", ""),
+		LLMModel:         getEnv("LLM_MODEL", "deepseek-chat"),
+		LLMTimeoutSec:    getEnvAsInt("LLM_TIMEOUT_SECONDS", 15),
 	}
 
 	mux := http.NewServeMux()
@@ -108,17 +139,138 @@ func handleTriage(w http.ResponseWriter, r *http.Request, cfg appConfig) {
 	}
 
 	alerts, notes := fetchRecentAlerts(r.Context(), cfg, req)
+	metricQueries := buildMetricQueries(cfg, req)
+	logQueries := buildLogQueries(cfg, req)
+	likelyCauses := buildLikelyCauses(alerts)
+	recommendedNext := buildRecommendedNext(alerts)
 	resp := triageResponse{
 		MachineID:       req.MachineID,
 		WindowMinutes:   req.WindowMinutes,
 		AlertContext:    alerts,
-		MetricQueries:   buildMetricQueries(cfg, req),
-		LogQueries:      buildLogQueries(cfg, req),
-		LikelyCauses:    buildLikelyCauses(alerts),
-		RecommendedNext: buildRecommendedNext(alerts),
+		MetricQueries:   metricQueries,
+		LogQueries:      logQueries,
+		LikelyCauses:    likelyCauses,
+		RecommendedNext: recommendedNext,
 		Notes:           notes,
 	}
+
+	if cfg.LLMEnabled {
+		diag, err := diagnoseWithLLM(r.Context(), cfg, triageContext{
+			MachineID:       req.MachineID,
+			WindowMinutes:   req.WindowMinutes,
+			AlertContext:    alerts,
+			MetricQueries:   metricQueries,
+			LogQueries:      logQueries,
+			LikelyCauses:    likelyCauses,
+			RecommendedNext: recommendedNext,
+		})
+		if err != nil {
+			resp.Notes = append(resp.Notes, "llm diagnosis failed: "+err.Error())
+		} else {
+			resp.Diagnosis = diag
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func diagnoseWithLLM(ctx context.Context, cfg appConfig, input triageContext) (*diagnosis, error) {
+	if cfg.LLMBaseURL == "" {
+		return nil, fmt.Errorf("LLM_BASE_URL is empty")
+	}
+	if strings.TrimSpace(cfg.LLMModel) == "" {
+		return nil, fmt.Errorf("LLM_MODEL is empty")
+	}
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+
+	reqBody := map[string]any{
+		"model": cfg.LLMModel,
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": strings.Join([]string{
+					"You are a read-only AIOps diagnostic assistant.",
+					"Use only the provided alert, metric-query, log-query, and runbook-like context.",
+					"Do not claim that you executed commands or changed infrastructure.",
+					"Return only strict JSON with fields: summary, severity, possible_causes, evidence, next_steps, confidence.",
+					"severity must be one of info, warning, critical.",
+					"confidence must be a number from 0 to 1.",
+				}, " "),
+			},
+			{
+				"role":    "user",
+				"content": "Diagnose this monitoring incident context:\n" + string(payload),
+			},
+		},
+		"temperature": 0.2,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	timeout := time.Duration(cfg.LLMTimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	endpoint := cfg.LLMBaseURL + "/v1/chat/completions"
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if cfg.LLMAPIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+cfg.LLMAPIKey)
+	}
+
+	client := &http.Client{Timeout: timeout + time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("llm endpoint returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("llm response has no choices")
+	}
+
+	content := cleanJSONContent(result.Choices[0].Message.Content)
+	var diag diagnosis
+	if err := json.Unmarshal([]byte(content), &diag); err != nil {
+		return nil, fmt.Errorf("failed to parse llm diagnosis json: %w", err)
+	}
+	if diag.Summary == "" {
+		return nil, fmt.Errorf("llm diagnosis summary is empty")
+	}
+	return &diag, nil
+}
+
+func cleanJSONContent(content string) string {
+	content = strings.TrimSpace(content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	return strings.TrimSpace(content)
 }
 
 func fetchRecentAlerts(ctx context.Context, cfg appConfig, req triageRequest) ([]alertRecord, []string) {
@@ -239,6 +391,21 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	return parsed
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return defaultValue
+	}
+	switch value {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defaultValue
+	}
 }
 
 func trimRightSlash(value string) string {

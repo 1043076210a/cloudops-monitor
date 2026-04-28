@@ -27,6 +27,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: cloudops-config
+          env:
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cloudops-secret
+                  key: LLM_API_KEY
+                  optional: true
           readinessProbe:
             httpGet:
               path: /healthz
